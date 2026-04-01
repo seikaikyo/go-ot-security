@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/seikaikyo/go-ot-security/internal/agent"
 	"github.com/seikaikyo/go-ot-security/internal/server"
 	"github.com/seikaikyo/go-ot-security/internal/store"
 )
@@ -28,6 +29,12 @@ func main() {
 		dbPath = "ot-security.db"
 	}
 
+	coordinatorURL := os.Getenv("COORDINATOR_URL")
+	nodeID := os.Getenv("NODE_ID")
+	if nodeID == "" {
+		nodeID = "ot-security-default"
+	}
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	// Database
@@ -38,8 +45,14 @@ func main() {
 	}
 	defer db.Close()
 
+	// Coordinator reporter
+	reporter := agent.NewReporter(coordinatorURL, nodeID)
+	if reporter != nil {
+		slog.Info("coordinator reporter enabled", "url", coordinatorURL, "node_id", nodeID)
+	}
+
 	// Server
-	srv := server.New(db)
+	srv := server.New(db, reporter)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)

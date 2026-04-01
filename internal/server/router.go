@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	cfgmgmt "github.com/seikaikyo/go-ot-security/internal/config"
+	"github.com/seikaikyo/go-ot-security/internal/agent"
 	"github.com/seikaikyo/go-ot-security/internal/compliance"
 	"github.com/seikaikyo/go-ot-security/internal/discovery"
 	"github.com/seikaikyo/go-ot-security/internal/monitor"
@@ -27,6 +29,7 @@ type Server struct {
 	monitor  *monitor.Monitor
 	alerts   *monitor.AlertEngine
 	snaps    *cfgmgmt.SnapshotStore
+	reporter *agent.Reporter
 }
 
 type scanProgress struct {
@@ -35,13 +38,14 @@ type scanProgress struct {
 	Total int    `json:"total"`
 }
 
-func New(db *store.DB) *Server {
+func New(db *store.DB, reporter *agent.Reporter) *Server {
 	alerts := monitor.NewAlertEngine()
 	return &Server{
-		db:      db,
-		alerts:  alerts,
-		monitor: monitor.New(db, alerts),
-		snaps:   cfgmgmt.NewSnapshotStore(),
+		db:       db,
+		alerts:   alerts,
+		monitor:  monitor.New(db, alerts),
+		snaps:    cfgmgmt.NewSnapshotStore(),
+		reporter: reporter,
 	}
 }
 
@@ -147,6 +151,14 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			assets, _ := s.db.ListAssets()
 			scanRec.AliveHosts = len(assets)
 			slog.Info("scan completed", "id", scanID, "assets", len(assets))
+
+			// 掃描完成後回報給 coordinator
+			if s.reporter != nil {
+				ctx := compliance.BuildContext(assets)
+				compReport := compliance.RunAllFrameworks(ctx)
+				recentAlerts := s.alerts.List(100)
+				go s.reporter.SendReport(context.Background(), scanRec, compReport, recentAlerts, assets)
+			}
 		}
 		s.db.UpdateScan(scanRec)
 	}()
