@@ -2,7 +2,10 @@ package discovery
 
 import (
 	"net"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 )
 
 // OUI database for industrial vendors (MAC address prefix → vendor)
@@ -56,31 +59,94 @@ func VendorFromMAC(mac string) string {
 	return ""
 }
 
-// LookupMAC tries to resolve MAC address from IP using ARP table.
+// LookupMAC resolves MAC address from IP via ARP table.
+// Works on macOS (arp -a) and Linux (/proc/net/arp).
 func LookupMAC(ip string) string {
-	// Try to get from local ARP cache by connecting
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return ""
-	}
-
+	// First: check if it's our own IP
+	ifaces, _ := net.Interfaces()
 	for _, iface := range ifaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
+		addrs, _ := iface.Addrs()
 		for _, addr := range addrs {
-			ipnet, ok := addr.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			if ipnet.IP.String() == ip {
+			if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.String() == ip {
 				return iface.HardwareAddr.String()
 			}
 		}
 	}
 
+	// Trigger ARP entry by connecting (TCP SYN populates ARP cache)
+	conn, err := net.DialTimeout("tcp", ip+":80", 100*time.Millisecond)
+	if err == nil {
+		conn.Close()
+	}
+	// Also try common port
+	conn, err = net.DialTimeout("tcp", ip+":22", 100*time.Millisecond)
+	if err == nil {
+		conn.Close()
+	}
+
+	// Read ARP table
+	return readARPTable(ip)
+}
+
+func readARPTable(ip string) string {
+	// Try Linux /proc/net/arp first
+	data, err := os.ReadFile("/proc/net/arp")
+	if err == nil {
+		return parseLinuxARP(string(data), ip)
+	}
+
+	// macOS: run arp -n <ip>
+	out, err := exec.Command("arp", "-n", ip).Output()
+	if err == nil {
+		return parseMacARP(string(out), ip)
+	}
+
 	return ""
+}
+
+func parseLinuxARP(data, targetIP string) string {
+	lines := strings.Split(data, "\n")
+	for _, line := range lines[1:] { // skip header
+		fields := strings.Fields(line)
+		if len(fields) >= 4 && fields[0] == targetIP {
+			mac := fields[3]
+			if mac != "00:00:00:00:00:00" {
+				return mac
+			}
+		}
+	}
+	return ""
+}
+
+func parseMacARP(data, targetIP string) string {
+	// macOS arp output: "? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ..."
+	lines := strings.Split(data, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, targetIP) && strings.Contains(line, " at ") {
+			parts := strings.Split(line, " at ")
+			if len(parts) >= 2 {
+				macPart := strings.Fields(parts[1])
+				if len(macPart) > 0 {
+					mac := macPart[0]
+					if mac != "(incomplete)" {
+						return normalizeMac(mac)
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// normalizeMac pads single-digit hex octets: "0:1b:1b" → "00:1b:1b"
+func normalizeMac(mac string) string {
+	parts := strings.Split(mac, ":")
+	for i, p := range parts {
+		if len(p) == 1 {
+			parts[i] = "0" + p
+		}
+	}
+	return strings.Join(parts, ":")
 }
 
 // ClassifyDevice determines device type from protocols and ports.
@@ -122,6 +188,29 @@ func ClassifyDevice(protocols []string, ports []int) string {
 		return "bac_controller"
 	case portSet[20000]:
 		return "rtu"
+
+	// IT devices
+	case protoSet["rdp"] || portSet[3389]:
+		return "it_workstation"
+	case protoSet["smb"] && protoSet["ldap"]:
+		return "it_domain_controller"
+	case protoSet["smb"] && (protoSet["mssql"] || protoSet["mysql"] || protoSet["postgresql"]):
+		return "it_database_server"
+	case protoSet["mssql"] || protoSet["mysql"] || protoSet["postgresql"]:
+		return "it_database_server"
+	case protoSet["smb"]:
+		return "it_file_server"
+	case protoSet["ldap"]:
+		return "it_directory_server"
+	case protoSet["smtp"]:
+		return "it_mail_server"
+	case protoSet["dns"]:
+		return "it_dns_server"
+	case protoSet["vnc"]:
+		return "it_workstation"
+	case portSet[9100]:
+		return "it_printer"
+
 	case portSet[22] && len(ports) == 1:
 		return "network_device"
 	case portSet[23]:
@@ -129,6 +218,27 @@ func ClassifyDevice(protocols []string, ports []int) string {
 	default:
 		return "unknown"
 	}
+}
+
+// IsITDevice returns true if the device type is an IT asset.
+func IsITDevice(deviceType string) bool {
+	switch deviceType {
+	case "it_workstation", "it_domain_controller", "it_database_server",
+		"it_file_server", "it_directory_server", "it_mail_server",
+		"it_dns_server", "it_printer", "web_server":
+		return true
+	}
+	return false
+}
+
+// IsOTDevice returns true if the device type is an OT asset.
+func IsOTDevice(deviceType string) bool {
+	switch deviceType {
+	case "plc", "hmi", "rtu", "semiconductor_equipment", "opcua_server",
+		"iot_gateway", "bac_controller", "legacy_device":
+		return true
+	}
+	return false
 }
 
 // RiskScore calculates a 0-10 risk score based on findings.
@@ -174,6 +284,24 @@ func RiskScore(protocols []string, ports []int) (float64, []string) {
 	if protoSet["http"] && (portSet[80] || portSet[8080]) {
 		score += 1.0
 		factors = append(factors, "HTTP management (unencrypted)")
+	}
+
+	// IT services exposed (risk if on OT network)
+	if protoSet["rdp"] || portSet[3389] {
+		score += 2.0
+		factors = append(factors, "RDP exposed (remote desktop)")
+	}
+	if protoSet["vnc"] || portSet[5900] {
+		score += 2.0
+		factors = append(factors, "VNC exposed (remote desktop)")
+	}
+	if protoSet["smb"] || portSet[445] {
+		score += 1.5
+		factors = append(factors, "SMB file sharing enabled")
+	}
+	if protoSet["mssql"] || protoSet["mysql"] || protoSet["postgresql"] {
+		score += 1.5
+		factors = append(factors, "Database port exposed")
 	}
 
 	// Too many open ports

@@ -44,6 +44,29 @@ func ProbePort(ip string, port int, timeout time.Duration) *ProbeResult {
 		return probeHTTP(ip, port, timeout, false)
 	case 443, 8443:
 		return probeHTTP(ip, port, timeout, true)
+	// IT protocols (identification only, no deep probe)
+	case 25:
+		return probeBanner(ip, port, timeout, "smtp")
+	case 53:
+		return &ProbeResult{Port: port, Protocol: "dns"}
+	case 135:
+		return &ProbeResult{Port: port, Protocol: "msrpc"}
+	case 139:
+		return &ProbeResult{Port: port, Protocol: "netbios"}
+	case 389:
+		return &ProbeResult{Port: port, Protocol: "ldap"}
+	case 445:
+		return &ProbeResult{Port: port, Protocol: "smb"}
+	case 1433:
+		return &ProbeResult{Port: port, Protocol: "mssql"}
+	case 3306:
+		return &ProbeResult{Port: port, Protocol: "mysql"}
+	case 3389:
+		return &ProbeResult{Port: port, Protocol: "rdp"}
+	case 5432:
+		return &ProbeResult{Port: port, Protocol: "postgresql"}
+	case 5900:
+		return probeBanner(ip, port, timeout, "vnc")
 	}
 
 	// Unknown port: try banner grab first (fast, non-destructive)

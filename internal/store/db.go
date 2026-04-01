@@ -177,19 +177,29 @@ func (db *DB) GetAsset(id string) (*Asset, error) {
 }
 
 func (db *DB) GetStats() map[string]any {
-	var total, plcCount, hmiCount int
-	var highRisk int
+	var total, plcCount, hmiCount, highRisk int
+	var itCount, otCount int
 	db.conn.QueryRow("SELECT COUNT(*) FROM assets").Scan(&total)
 	db.conn.QueryRow("SELECT COUNT(*) FROM assets WHERE device_type='plc'").Scan(&plcCount)
 	db.conn.QueryRow("SELECT COUNT(*) FROM assets WHERE device_type='hmi'").Scan(&hmiCount)
 	db.conn.QueryRow("SELECT COUNT(*) FROM assets WHERE risk_score >= 7").Scan(&highRisk)
+	db.conn.QueryRow("SELECT COUNT(*) FROM assets WHERE device_type LIKE 'it_%' OR device_type='web_server'").Scan(&itCount)
+	db.conn.QueryRow("SELECT COUNT(*) FROM assets WHERE device_type IN ('plc','hmi','rtu','semiconductor_equipment','opcua_server','iot_gateway','bac_controller','legacy_device')").Scan(&otCount)
+
+	segregated := true
+	if itCount > 0 && otCount > 0 {
+		segregated = false
+	}
 
 	return map[string]any{
-		"total_assets":     total,
-		"plc_count":        plcCount,
-		"hmi_count":        hmiCount,
-		"high_risk_count":  highRisk,
-		"last_scan":        time.Now().Format(time.RFC3339),
+		"total_assets":    total,
+		"plc_count":       plcCount,
+		"hmi_count":       hmiCount,
+		"high_risk_count": highRisk,
+		"it_count":        itCount,
+		"ot_count":        otCount,
+		"it_ot_separated": segregated,
+		"last_scan":       time.Now().Format(time.RFC3339),
 	}
 }
 

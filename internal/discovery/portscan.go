@@ -8,14 +8,29 @@ import (
 	"time"
 )
 
-// CommonPorts for industrial networks
+// CommonPorts for IT + OT converged networks
 var CommonPorts = []int{
+	// IT common
 	21,    // FTP
 	22,    // SSH
 	23,    // Telnet
+	25,    // SMTP
+	53,    // DNS
 	80,    // HTTP
-	102,   // S7comm (Siemens)
+	135,   // MS-RPC
+	139,   // NetBIOS
+	389,   // LDAP
 	443,   // HTTPS
+	445,   // SMB
+	1433,  // MSSQL
+	3306,  // MySQL
+	3389,  // RDP
+	5432,  // PostgreSQL
+	5900,  // VNC
+	8080,  // HTTP alt
+
+	// OT / Industrial
+	102,   // S7comm (Siemens)
 	502,   // Modbus TCP
 	1883,  // MQTT
 	4840,  // OPC UA
