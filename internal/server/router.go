@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/seikaikyo/go-ot-security/internal/compliance"
 	"github.com/seikaikyo/go-ot-security/internal/discovery"
 	"github.com/seikaikyo/go-ot-security/internal/store"
+	"github.com/seikaikyo/go-ot-security/internal/vuln"
 )
 
 type Server struct {
@@ -39,6 +41,10 @@ func (s *Server) Router() chi.Router {
 	r.Get("/api/assets/{id}", s.handleGetAsset)
 	r.Get("/api/topology", s.handleTopology)
 	r.Get("/api/stats", s.handleStats)
+
+	// Phase 2: Vulnerability + Compliance
+	r.Get("/api/vuln/{id}", s.handleVuln)
+	r.Get("/api/compliance", s.handleCompliance)
 
 	// Embedded frontend
 	r.HandleFunc("/*", staticHandler())
@@ -201,4 +207,36 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	respondOK(w, s.db.GetStats())
+}
+
+func (s *Server) handleVuln(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	asset, err := s.db.GetAsset(id)
+	if err != nil {
+		respondErr(w, http.StatusNotFound, "asset not found")
+		return
+	}
+
+	cves := vuln.LookupCVEs(asset.Vendor, asset.Model, asset.Protocols)
+	creds := vuln.CheckDefaultCredentials(asset.Vendor, asset.Model, asset.OpenPorts, asset.Protocols)
+	insecure := vuln.CheckInsecureServices(asset.OpenPorts, asset.Protocols)
+
+	respondOK(w, map[string]any{
+		"asset_id":        id,
+		"cves":            cves,
+		"credentials":     creds,
+		"insecure_services": insecure,
+	})
+}
+
+func (s *Server) handleCompliance(w http.ResponseWriter, r *http.Request) {
+	assets, err := s.db.ListAssets()
+	if err != nil {
+		respondErr(w, http.StatusInternalServerError, "failed to list assets")
+		return
+	}
+
+	ctx := compliance.BuildContext(assets)
+	report := compliance.RunAllFrameworks(ctx)
+	respondOK(w, report)
 }
