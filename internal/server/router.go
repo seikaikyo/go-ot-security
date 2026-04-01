@@ -8,9 +8,12 @@ import (
 	"sync"
 	"time"
 
+	"strconv"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/seikaikyo/go-ot-security/internal/compliance"
 	"github.com/seikaikyo/go-ot-security/internal/discovery"
+	"github.com/seikaikyo/go-ot-security/internal/monitor"
 	"github.com/seikaikyo/go-ot-security/internal/store"
 	"github.com/seikaikyo/go-ot-security/internal/vuln"
 )
@@ -20,6 +23,8 @@ type Server struct {
 	scanMu   sync.Mutex
 	scanning bool
 	scanProg scanProgress
+	monitor  *monitor.Monitor
+	alerts   *monitor.AlertEngine
 }
 
 type scanProgress struct {
@@ -29,7 +34,12 @@ type scanProgress struct {
 }
 
 func New(db *store.DB) *Server {
-	return &Server{db: db}
+	alerts := monitor.NewAlertEngine()
+	return &Server{
+		db:      db,
+		alerts:  alerts,
+		monitor: monitor.New(db, alerts),
+	}
 }
 
 func (s *Server) Router() chi.Router {
@@ -45,6 +55,14 @@ func (s *Server) Router() chi.Router {
 	// Phase 2: Vulnerability + Compliance
 	r.Get("/api/vuln/{id}", s.handleVuln)
 	r.Get("/api/compliance", s.handleCompliance)
+
+	// Phase 3: Monitoring
+	r.Post("/api/monitor/start", s.handleMonitorStart)
+	r.Post("/api/monitor/stop", s.handleMonitorStop)
+	r.Get("/api/monitor/status", s.handleMonitorStatus)
+	r.Get("/api/alerts", s.handleAlerts)
+	r.Get("/api/alerts/stats", s.handleAlertStats)
+	r.Post("/api/alerts/{id}/ack", s.handleAlertAck)
 
 	// Embedded frontend
 	r.HandleFunc("/*", staticHandler())
@@ -239,4 +257,59 @@ func (s *Server) handleCompliance(w http.ResponseWriter, r *http.Request) {
 	ctx := compliance.BuildContext(assets)
 	report := compliance.RunAllFrameworks(ctx)
 	respondOK(w, report)
+}
+
+func (s *Server) handleMonitorStart(w http.ResponseWriter, r *http.Request) {
+	var cfg monitor.Config
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		respondErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if cfg.Subnet == "" {
+		respondErr(w, http.StatusBadRequest, "subnet is required")
+		return
+	}
+
+	if err := s.monitor.Start(cfg); err != nil {
+		respondErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	respondOK(w, map[string]any{"status": "started", "subnet": cfg.Subnet})
+}
+
+func (s *Server) handleMonitorStop(w http.ResponseWriter, r *http.Request) {
+	s.monitor.Stop()
+	respondOK(w, map[string]string{"status": "stopped"})
+}
+
+func (s *Server) handleMonitorStatus(w http.ResponseWriter, r *http.Request) {
+	respondOK(w, s.monitor.Status())
+}
+
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	respondOK(w, s.alerts.List(limit))
+}
+
+func (s *Server) handleAlertStats(w http.ResponseWriter, r *http.Request) {
+	respondOK(w, s.alerts.Stats())
+}
+
+func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		respondErr(w, http.StatusBadRequest, "invalid alert id")
+		return
+	}
+	if s.alerts.Ack(id) {
+		respondOK(w, map[string]string{"status": "acked"})
+	} else {
+		respondErr(w, http.StatusNotFound, "alert not found")
+	}
 }
