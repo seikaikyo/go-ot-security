@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	cfgmgmt "github.com/seikaikyo/go-ot-security/internal/config"
 	"github.com/seikaikyo/go-ot-security/internal/compliance"
 	"github.com/seikaikyo/go-ot-security/internal/discovery"
 	"github.com/seikaikyo/go-ot-security/internal/monitor"
@@ -25,6 +26,7 @@ type Server struct {
 	scanProg scanProgress
 	monitor  *monitor.Monitor
 	alerts   *monitor.AlertEngine
+	snaps    *cfgmgmt.SnapshotStore
 }
 
 type scanProgress struct {
@@ -39,6 +41,7 @@ func New(db *store.DB) *Server {
 		db:      db,
 		alerts:  alerts,
 		monitor: monitor.New(db, alerts),
+		snaps:   cfgmgmt.NewSnapshotStore(),
 	}
 }
 
@@ -63,6 +66,13 @@ func (s *Server) Router() chi.Router {
 	r.Get("/api/alerts", s.handleAlerts)
 	r.Get("/api/alerts/stats", s.handleAlertStats)
 	r.Post("/api/alerts/{id}/ack", s.handleAlertAck)
+
+	// Phase 4: Config Management
+	r.Post("/api/config/snapshot", s.handleSnapshot)
+	r.Post("/api/config/golden", s.handleSetGolden)
+	r.Get("/api/config/snapshots/{ip}", s.handleListSnapshots)
+	r.Get("/api/config/diff/{ip}", s.handleDiff)
+	r.Get("/api/config/devices", s.handleConfigDevices)
 
 	// Embedded frontend
 	r.HandleFunc("/*", staticHandler())
@@ -312,4 +322,132 @@ func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
 	} else {
 		respondErr(w, http.StatusNotFound, "alert not found")
 	}
+}
+
+func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	var req cfgmgmt.SnapshotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Host == "" {
+		respondErr(w, http.StatusBadRequest, "host is required")
+		return
+	}
+
+	snap, err := cfgmgmt.TakeSnapshot(req)
+	if err != nil {
+		respondErr(w, http.StatusBadGateway, "snapshot failed: "+err.Error())
+		return
+	}
+
+	s.snaps.Add(snap)
+
+	// Check against golden image
+	golden := s.snaps.GetGolden(snap.DeviceIP)
+	if golden != nil {
+		diff := cfgmgmt.DiffSnapshots(golden, snap)
+		if len(diff.Changes) > 0 {
+			s.alerts.Fire("high", snap.DeviceIP, "T0821", "Modify Controller Tasking",
+				fmt.Sprintf("Config drift: %d registers changed from golden image on %s", len(diff.Changes), snap.DeviceIP))
+		}
+	}
+
+	respondOK(w, snap)
+}
+
+func (s *Server) handleSetGolden(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DeviceIP   string `json:"device_ip"`
+		SnapshotID string `json:"snapshot_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.SnapshotID != "" {
+		snap := s.snaps.Get(req.DeviceIP, req.SnapshotID)
+		if snap == nil {
+			respondErr(w, http.StatusNotFound, "snapshot not found")
+			return
+		}
+		s.snaps.SetGolden(snap)
+	} else {
+		latest := s.snaps.Latest(req.DeviceIP)
+		if latest == nil {
+			respondErr(w, http.StatusNotFound, "no snapshots for device")
+			return
+		}
+		s.snaps.SetGolden(latest)
+	}
+
+	respondOK(w, map[string]string{"status": "golden image set", "device": req.DeviceIP})
+}
+
+func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
+	ip := chi.URLParam(r, "ip")
+	snaps := s.snaps.List(ip)
+
+	// Return summary without full register data
+	type snapSummary struct {
+		ID        string `json:"id"`
+		Label     string `json:"label"`
+		Registers int    `json:"register_count"`
+		Timestamp string `json:"timestamp"`
+	}
+
+	summaries := make([]snapSummary, len(snaps))
+	for i, snap := range snaps {
+		summaries[i] = snapSummary{
+			ID:        snap.ID,
+			Label:     snap.Label,
+			Registers: len(snap.Registers),
+			Timestamp: snap.Timestamp.Format(time.RFC3339),
+		}
+	}
+
+	golden := s.snaps.GetGolden(ip)
+	var goldenInfo *snapSummary
+	if golden != nil {
+		goldenInfo = &snapSummary{
+			ID:        golden.ID,
+			Label:     golden.Label,
+			Registers: len(golden.Registers),
+			Timestamp: golden.Timestamp.Format(time.RFC3339),
+		}
+	}
+
+	respondOK(w, map[string]any{
+		"device":    ip,
+		"golden":    goldenInfo,
+		"snapshots": summaries,
+	})
+}
+
+func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
+	ip := chi.URLParam(r, "ip")
+
+	golden := s.snaps.GetGolden(ip)
+	latest := s.snaps.Latest(ip)
+
+	if golden == nil {
+		respondErr(w, http.StatusNotFound, "no golden image set for device")
+		return
+	}
+	if latest == nil {
+		respondErr(w, http.StatusNotFound, "no snapshots for device")
+		return
+	}
+
+	diff := cfgmgmt.DiffSnapshots(golden, latest)
+	respondOK(w, diff)
+}
+
+func (s *Server) handleConfigDevices(w http.ResponseWriter, r *http.Request) {
+	devices := s.snaps.ListDevices()
+	if devices == nil {
+		devices = []string{}
+	}
+	respondOK(w, devices)
 }
