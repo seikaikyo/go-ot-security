@@ -1,7 +1,7 @@
 ---
 title: "Phase 1: Asset Discovery"
 type: feature
-status: in-progress
+status: completed
 spec: ot-security-platform
 created: 2026-04-01
 ---
