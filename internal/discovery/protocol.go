@@ -20,6 +20,7 @@ type ProbeResult struct {
 
 // ProbePort identifies the protocol running on a specific port.
 func ProbePort(ip string, port int, timeout time.Duration) *ProbeResult {
+	// Try well-known port mapping first
 	switch port {
 	case 502:
 		return probeModbus(ip, port, timeout)
@@ -43,9 +44,33 @@ func ProbePort(ip string, port int, timeout time.Duration) *ProbeResult {
 		return probeHTTP(ip, port, timeout, false)
 	case 443, 8443:
 		return probeHTTP(ip, port, timeout, true)
-	default:
-		return probeBanner(ip, port, timeout, "unknown")
 	}
+
+	// Unknown port: try banner grab first (fast, non-destructive)
+	banner := probeBanner(ip, port, timeout, "unknown")
+	if banner != nil && banner.Banner != "" {
+		// SSH/Telnet detected from banner
+		if banner.Protocol != "unknown" {
+			return banner
+		}
+		// Check if banner looks like HTTP
+		if len(banner.Banner) > 4 && banner.Banner[:4] == "HTTP" {
+			return probeHTTP(ip, port, timeout, false)
+		}
+	}
+
+	// Try industrial protocol probes (one at a time, stop on first match)
+	if r := probeModbus(ip, port, timeout); r != nil {
+		return r
+	}
+	if r := probeHSMS(ip, port, timeout); r != nil {
+		return r
+	}
+	if r := probeMQTT(ip, port, timeout); r != nil {
+		return r
+	}
+
+	return banner
 }
 
 // probeModbus sends Modbus FC17 (Report Slave ID)
@@ -64,8 +89,16 @@ func probeModbus(ip string, port int, timeout time.Duration) *ProbeResult {
 	buf := make([]byte, 256)
 	n, err := conn.Read(buf)
 	if err != nil || n < 9 {
-		// Even if FC17 fails, port 502 responding is Modbus
-		return &ProbeResult{Port: port, Protocol: "modbus", Banner: "Modbus TCP (no slave ID)"}
+		// Only assume Modbus on well-known port 502
+		if port == 502 {
+			return &ProbeResult{Port: port, Protocol: "modbus", Banner: "Modbus TCP (no slave ID)"}
+		}
+		return nil
+	}
+
+	// Verify Modbus TCP response: protocol ID must be 0x0000, FC must match
+	if n >= 8 && (buf[2] != 0x00 || buf[3] != 0x00) {
+		return nil // Not a Modbus response
 	}
 
 	// Parse response: FC17 response contains device ID string

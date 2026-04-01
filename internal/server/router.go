@@ -84,7 +84,7 @@ func (s *Server) Router() chi.Router {
 func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Subnet      string `json:"subnet"`
-		Ports       string `json:"ports"`
+		Ports       []int  `json:"ports"`
 		TimeoutMs   int    `json:"timeout_ms"`
 		Concurrency int    `json:"concurrency"`
 	}
@@ -117,6 +117,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 
 	cfg := discovery.ScanConfig{
 		Subnet:      req.Subnet,
+		Ports:       req.Ports,
 		TimeoutMs:   req.TimeoutMs,
 		Concurrency: req.Concurrency,
 	}
