@@ -1,0 +1,5 @@
+ot-hook	Factory networks run protocols from a different era. Modbus has no authentication. SECS has no encryption. Legacy devices were never designed for a connected world. What if you could scan, assess, and monitor in minutes?
+ot-discovery	go-ot-security scans your subnet and identifies every device. Eight industrial protocol probes including Modbus, S7comm, EtherNet/IP, and HSMS. MAC vendor identification classifies each device with a risk score.
+ot-monitor	Continuous monitoring detects changes as they happen. New devices, unexpected open ports, configuration drift in PLC registers. Alerts map to MITRE ATT&CK for ICS techniques.
+ot-dashboard	The embedded dashboard shows your OT security posture. Device inventory, vulnerability findings, compliance scores across four frameworks. IEC 62443, NIST CSF 2.0, ISO 27001, and SEMI E187. All in a single dark-themed interface.
+ot-cta	go-ot-security. A single Go binary with no dependencies. Deploy on a Raspberry Pi, connect to your factory network. Read-only scanning designed to be safe for production environments. Open source under MIT license. Built with AI-assisted development.

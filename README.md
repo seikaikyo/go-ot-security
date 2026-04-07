@@ -53,6 +53,36 @@ GOOS=linux GOARCH=amd64 go build -o ot-security-amd64 ./cmd/server/
 
 Single binary, no dependencies. No runtime, no database server, no npm.
 
+## Video
+
+Introduction videos showing how go-ot-security works.
+Available in English and Japanese.
+
+| | |
+|---|---|
+| ![Cover](video/thumbnails/cover.png) | ![Dashboard](video/thumbnails/04-dashboard.jpg) |
+| ![Discovery](video/thumbnails/02-discovery.jpg) | ![Monitor](video/thumbnails/03-monitor.jpg) |
+
+**Scenes:**
+
+| # | Scene | What It Shows |
+|---|-------|---------------|
+| 1 | The Problem | Factory protocols with no authentication or encryption |
+| 2 | Scan & Assess | Subnet scan, 8 protocol probes, compliance scoring |
+| 3 | Monitor & Protect | Real-time alerts, config drift detection, MITRE ATT&CK mapping |
+| 4 | Dashboard | Embedded React UI with device inventory and compliance view |
+| 5 | CTA | Single binary deployment, MIT license, open source |
+
+Videos generated with [Remotion](https://www.remotion.dev/). Narration by Google Cloud TTS.
+
+```bash
+# Rebuild videos
+cd video/remotion
+npm install
+python generate-audio-gcloud.py en ja   # generate TTS audio
+npm run render:all                       # render EN + JA MP4
+```
+
 ## Dashboard
 
 Dark-themed technical dashboard with two tabs:

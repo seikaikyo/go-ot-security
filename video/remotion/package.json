@@ -1,0 +1,21 @@
+{
+  "name": "go-ot-security-video",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx remotion studio",
+    "render:otsec-en": "npx remotion render OtSec-EN out/go-ot-security.en.mp4",
+    "render:otsec-ja": "npx remotion render OtSec-JA out/go-ot-security.ja.mp4",
+    "render:all": "npm run render:otsec-en && npm run render:otsec-ja"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.441",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "remotion": "4.0.441"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "typescript": "^5.4.0"
+  }
+}

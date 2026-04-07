@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/seikaikyo/go-common/response"
 	cfgmgmt "github.com/seikaikyo/go-ot-security/internal/config"
 	"github.com/seikaikyo/go-ot-security/internal/agent"
 	"github.com/seikaikyo/go-ot-security/internal/compliance"
@@ -93,18 +94,18 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		Concurrency int    `json:"concurrency"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondErr(w, http.StatusBadRequest, "invalid request body")
+		response.Err(w,http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Subnet == "" {
-		respondErr(w, http.StatusBadRequest, "subnet is required")
+		response.Err(w,http.StatusBadRequest, "subnet is required")
 		return
 	}
 
 	s.scanMu.Lock()
 	if s.scanning {
 		s.scanMu.Unlock()
-		respondErr(w, http.StatusConflict, "scan already in progress")
+		response.Err(w,http.StatusConflict, "scan already in progress")
 		return
 	}
 	s.scanning = true
@@ -163,7 +164,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		s.db.UpdateScan(scanRec)
 	}()
 
-	respondOK(w, map[string]any{
+	response.OK(w,map[string]any{
 		"scan_id": scanID,
 		"status":  "running",
 		"message": "scan started",
@@ -190,35 +191,35 @@ func (s *Server) handleScanStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	respondOK(w, data)
+	response.OK(w,data)
 }
 
 func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
 	assets, err := s.db.ListAssets()
 	if err != nil {
-		respondErr(w, http.StatusInternalServerError, "failed to list assets")
+		response.Err(w,http.StatusInternalServerError, "failed to list assets")
 		return
 	}
 	if assets == nil {
 		assets = []store.Asset{}
 	}
-	respondOK(w, assets)
+	response.OK(w,assets)
 }
 
 func (s *Server) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	asset, err := s.db.GetAsset(id)
 	if err != nil {
-		respondErr(w, http.StatusNotFound, "asset not found")
+		response.Err(w,http.StatusNotFound, "asset not found")
 		return
 	}
-	respondOK(w, asset)
+	response.OK(w,asset)
 }
 
 func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	assets, err := s.db.ListAssets()
 	if err != nil {
-		respondErr(w, http.StatusInternalServerError, "failed to list assets")
+		response.Err(w,http.StatusInternalServerError, "failed to list assets")
 		return
 	}
 
@@ -241,20 +242,20 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	respondOK(w, map[string]any{
+	response.OK(w,map[string]any{
 		"nodes": nodes,
 	})
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	respondOK(w, s.db.GetStats())
+	response.OK(w,s.db.GetStats())
 }
 
 func (s *Server) handleVuln(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	asset, err := s.db.GetAsset(id)
 	if err != nil {
-		respondErr(w, http.StatusNotFound, "asset not found")
+		response.Err(w,http.StatusNotFound, "asset not found")
 		return
 	}
 
@@ -262,7 +263,7 @@ func (s *Server) handleVuln(w http.ResponseWriter, r *http.Request) {
 	creds := vuln.CheckDefaultCredentials(asset.Vendor, asset.Model, asset.OpenPorts, asset.Protocols)
 	insecure := vuln.CheckInsecureServices(asset.OpenPorts, asset.Protocols)
 
-	respondOK(w, map[string]any{
+	response.OK(w,map[string]any{
 		"asset_id":        id,
 		"cves":            cves,
 		"credentials":     creds,
@@ -273,40 +274,40 @@ func (s *Server) handleVuln(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCompliance(w http.ResponseWriter, r *http.Request) {
 	assets, err := s.db.ListAssets()
 	if err != nil {
-		respondErr(w, http.StatusInternalServerError, "failed to list assets")
+		response.Err(w,http.StatusInternalServerError, "failed to list assets")
 		return
 	}
 
 	ctx := compliance.BuildContext(assets)
 	report := compliance.RunAllFrameworks(ctx)
-	respondOK(w, report)
+	response.OK(w,report)
 }
 
 func (s *Server) handleMonitorStart(w http.ResponseWriter, r *http.Request) {
 	var cfg monitor.Config
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		respondErr(w, http.StatusBadRequest, "invalid request body")
+		response.Err(w,http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if cfg.Subnet == "" {
-		respondErr(w, http.StatusBadRequest, "subnet is required")
+		response.Err(w,http.StatusBadRequest, "subnet is required")
 		return
 	}
 
 	if err := s.monitor.Start(cfg); err != nil {
-		respondErr(w, http.StatusConflict, err.Error())
+		response.Err(w,http.StatusConflict, err.Error())
 		return
 	}
-	respondOK(w, map[string]any{"status": "started", "subnet": cfg.Subnet})
+	response.OK(w,map[string]any{"status": "started", "subnet": cfg.Subnet})
 }
 
 func (s *Server) handleMonitorStop(w http.ResponseWriter, r *http.Request) {
 	s.monitor.Stop()
-	respondOK(w, map[string]string{"status": "stopped"})
+	response.OK(w,map[string]string{"status": "stopped"})
 }
 
 func (s *Server) handleMonitorStatus(w http.ResponseWriter, r *http.Request) {
-	respondOK(w, s.monitor.Status())
+	response.OK(w,s.monitor.Status())
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
@@ -316,41 +317,41 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	respondOK(w, s.alerts.List(limit))
+	response.OK(w,s.alerts.List(limit))
 }
 
 func (s *Server) handleAlertStats(w http.ResponseWriter, r *http.Request) {
-	respondOK(w, s.alerts.Stats())
+	response.OK(w,s.alerts.Stats())
 }
 
 func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		respondErr(w, http.StatusBadRequest, "invalid alert id")
+		response.Err(w,http.StatusBadRequest, "invalid alert id")
 		return
 	}
 	if s.alerts.Ack(id) {
-		respondOK(w, map[string]string{"status": "acked"})
+		response.OK(w,map[string]string{"status": "acked"})
 	} else {
-		respondErr(w, http.StatusNotFound, "alert not found")
+		response.Err(w,http.StatusNotFound, "alert not found")
 	}
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	var req cfgmgmt.SnapshotRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondErr(w, http.StatusBadRequest, "invalid request body")
+		response.Err(w,http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Host == "" {
-		respondErr(w, http.StatusBadRequest, "host is required")
+		response.Err(w,http.StatusBadRequest, "host is required")
 		return
 	}
 
 	snap, err := cfgmgmt.TakeSnapshot(req)
 	if err != nil {
-		respondErr(w, http.StatusBadGateway, "snapshot failed: "+err.Error())
+		response.Err(w,http.StatusBadGateway, "snapshot failed: "+err.Error())
 		return
 	}
 
@@ -366,7 +367,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	respondOK(w, snap)
+	response.OK(w,snap)
 }
 
 func (s *Server) handleSetGolden(w http.ResponseWriter, r *http.Request) {
@@ -375,27 +376,27 @@ func (s *Server) handleSetGolden(w http.ResponseWriter, r *http.Request) {
 		SnapshotID string `json:"snapshot_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondErr(w, http.StatusBadRequest, "invalid request body")
+		response.Err(w,http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.SnapshotID != "" {
 		snap := s.snaps.Get(req.DeviceIP, req.SnapshotID)
 		if snap == nil {
-			respondErr(w, http.StatusNotFound, "snapshot not found")
+			response.Err(w,http.StatusNotFound, "snapshot not found")
 			return
 		}
 		s.snaps.SetGolden(snap)
 	} else {
 		latest := s.snaps.Latest(req.DeviceIP)
 		if latest == nil {
-			respondErr(w, http.StatusNotFound, "no snapshots for device")
+			response.Err(w,http.StatusNotFound, "no snapshots for device")
 			return
 		}
 		s.snaps.SetGolden(latest)
 	}
 
-	respondOK(w, map[string]string{"status": "golden image set", "device": req.DeviceIP})
+	response.OK(w,map[string]string{"status": "golden image set", "device": req.DeviceIP})
 }
 
 func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
@@ -431,7 +432,7 @@ func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	respondOK(w, map[string]any{
+	response.OK(w,map[string]any{
 		"device":    ip,
 		"golden":    goldenInfo,
 		"snapshots": summaries,
@@ -445,16 +446,16 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	latest := s.snaps.Latest(ip)
 
 	if golden == nil {
-		respondErr(w, http.StatusNotFound, "no golden image set for device")
+		response.Err(w,http.StatusNotFound, "no golden image set for device")
 		return
 	}
 	if latest == nil {
-		respondErr(w, http.StatusNotFound, "no snapshots for device")
+		response.Err(w,http.StatusNotFound, "no snapshots for device")
 		return
 	}
 
 	diff := cfgmgmt.DiffSnapshots(golden, latest)
-	respondOK(w, diff)
+	response.OK(w,diff)
 }
 
 func (s *Server) handleConfigDevices(w http.ResponseWriter, r *http.Request) {
@@ -462,5 +463,5 @@ func (s *Server) handleConfigDevices(w http.ResponseWriter, r *http.Request) {
 	if devices == nil {
 		devices = []string{}
 	}
-	respondOK(w, devices)
+	response.OK(w,devices)
 }
