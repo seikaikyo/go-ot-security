@@ -65,7 +65,10 @@ func main() {
 	// the demo against a different frontend origin.
 	corsOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
 	if corsOrigins == "" {
-		corsOrigins = "http://localhost:3000,https://trace-demo.seikai.dev"
+		// 5173 is the trace-demo dev port that pairs with dashai-go's
+		// debug-mode CORS allowlist (5173-5176). Without it the local
+		// stack triggers a "Failed to fetch" on the Scan modal.
+		corsOrigins = "http://localhost:3000,http://localhost:5173,https://trace-demo.seikai.dev"
 	}
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   strings.Split(corsOrigins, ","),
