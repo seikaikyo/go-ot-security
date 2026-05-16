@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/seikaikyo/go-ot-security/internal/agent"
 	"github.com/seikaikyo/go-ot-security/internal/server"
 	"github.com/seikaikyo/go-ot-security/internal/store"
@@ -57,6 +59,21 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+
+	// CORS: trace-demo (Vercel) + local dev call the scanner API directly
+	// over HTTP/JSON. Override with CORS_ALLOWED_ORIGINS (CSV) if you run
+	// the demo against a different frontend origin.
+	corsOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if corsOrigins == "" {
+		corsOrigins = "http://localhost:3000,https://trace-demo.seikai.dev"
+	}
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   strings.Split(corsOrigins, ","),
+		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type"},
+		AllowCredentials: false,
+		MaxAge:           300,
+	}))
 
 	// Health
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
