@@ -291,14 +291,16 @@ go-ot-security/
 │   │   └── embed.go                # //go:embed React dashboard
 │   └── store/                      # SQLite persistence
 │       └── db.go                   # Asset, scan, alert tables
-├── web/dashboard/                  # React source (dev only)
-│   └── src/
-│       ├── App.tsx                 # Discover + Monitor tabs
-│       └── components/             # ScanForm, AssetTable, CompliancePanel, etc.
+├── web/dashboard/                  # React source, not published here (see note below)
 ├── openspec/                       # Spec-driven development docs
 ├── go.mod
 └── LICENSE
 ```
+
+The dashboard React source is not distributed with this repository. The
+binary serves a prebuilt copy embedded at compile time via `embed.go`, so
+`go build` and every feature in this README work from a plain clone; only
+the frontend sources are absent.
 
 ## Framework Mapping
 
