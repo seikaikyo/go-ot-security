@@ -22,6 +22,12 @@ theme Edit 模式新增 Scan 按鈕會直接打 `/api/scan` `/api/scan/status`
 
 `CORS_ALLOWED_ORIGINS`：CSV 覆寫，預設 `http://localhost:3000,https://trace-demo.seikai.dev`。
 
+> **預設值已被 `security-audit-remediation.md` 取代**：安全稽核移除了預設值裡的
+> `https://trace-demo.seikai.dev`。當時 API 完全沒有認證，預設允許這個外部
+> origin 等於授權該網域的 JavaScript 讀走本機掃描器的完整回應。現在預設只留
+> loopback origin，trace-demo 要接就得同時設 `CORS_ALLOWED_ORIGINS` 與
+> `OTSEC_API_TOKEN`。
+
 ## 測試計畫
 
 | 步驟 | 預期 |

@@ -33,12 +33,42 @@ Open a browser. Scan the subnet. Get a complete security assessment in minutes.
 # Build
 go build -o ot-security ./cmd/server/
 
-# Run
+# Run: binds 127.0.0.1:8080 and prints a one-time API token
 ./ot-security
 
 # Open browser
-open http://localhost:8443
+open http://127.0.0.1:8080
 ```
+
+Every `/api` route needs that token:
+
+```bash
+curl -H "Authorization: Bearer $OTSEC_API_TOKEN" http://127.0.0.1:8080/api/assets
+```
+
+Set `OTSEC_API_TOKEN` to pin your own token instead of getting a fresh one
+each run. `/health` stays open so a supervisor probe works without it.
+
+### Access model
+
+The API serves the complete asset inventory, the per-device default
+credential findings and the compliance report, so the defaults are
+deliberately tight:
+
+| Default | Reason |
+|---------|--------|
+| Binds `127.0.0.1:8080` | Reaching it from the network has to be deliberate: `-listen 0.0.0.0:8080` |
+| Token required on `/api/*` | Constant-time compare. No token configured means the API refuses to serve, it never serves anonymously |
+| `application/json` required on writes | Closes the `text/plain` path that skips the CORS preflight |
+| CORS allows loopback origins only | External origins are opt-in through `CORS_ALLOWED_ORIGINS` |
+| Snapshot targets limited to discovered assets | Stops the Modbus endpoint being used to reach the rest of the network |
+
+Transport is plain HTTP, and the port is 8080 rather than 8443 because the
+traffic is not encrypted and the port should not claim otherwise. On the
+default loopback bind nothing leaves the host. When you expose the API with
+`-listen`, set `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve it over TLS with a
+real certificate. Without them a non-loopback bind logs a plaintext warning
+at startup.
 
 ## Field Deployment
 
@@ -164,6 +194,10 @@ Dark-themed technical dashboard with two tabs:
 - Per-device snapshot history (last 50)
 
 ## API Reference
+
+All `/api` routes require `Authorization: Bearer <token>` (or
+`X-API-Token: <token>`). POST routes additionally require
+`Content-Type: application/json` and must not come from a cross-site origin.
 
 ### Discovery
 
@@ -291,14 +325,25 @@ NIST CSF 2.0          IEC 62443-3-3       ISO 27001:2022      SEMI E187
 - **Rate controlled**: Configurable concurrency (default 50), inter-probe delay
 - **Timeout**: All probes have 500ms timeout (configurable)
 - **No exploitation**: Discovery and assessment only
-- **Physical access**: Requires network connectivity to target subnet
+- **Network reachability**: Requires network connectivity to the target subnet
+- **Authorization**: Reachability is not permission. Get written authorisation
+  for the subnet before scanning it
+- **API access control**: Bearer token on every `/api` route, loopback bind by
+  default, snapshot targets restricted to already discovered assets
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8443` | HTTP server port |
+| `OTSEC_LISTEN` | `127.0.0.1:8080` | Listen address. A bare port or `:port` stays on loopback. Overridden by `-listen` |
+| `PORT` | `8080` | Port only, always bound to loopback. Kept for compatibility; prefer `OTSEC_LISTEN` |
+| `OTSEC_API_TOKEN` | generated per run | Bearer token for `/api`. Generated tokens are printed to stderr at startup |
+| `CORS_ALLOWED_ORIGINS` | loopback origins | CSV of browser origins allowed to call the API |
+| `TLS_CERT_FILE` | unset | PEM certificate. Set with `TLS_KEY_FILE` to serve HTTPS |
+| `TLS_KEY_FILE` | unset | PEM private key |
 | `DB_PATH` | `ot-security.db` | SQLite database path |
+| `COORDINATOR_URL` | unset | Optional coordinator endpoint for scan reports |
+| `NODE_ID` | `ot-security-default` | Node identity in coordinator reports |
 
 ## Tech Stack
 

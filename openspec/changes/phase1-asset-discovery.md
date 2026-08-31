@@ -315,7 +315,12 @@ Embedded lookup table for industrial vendor identification:
 - **Rate controlled**: Configurable concurrency, prevents network flooding
 - **Timeout**: All probes have configurable timeout (default 500ms)
 - **No exploitation**: Discovery only, no vulnerability exploitation
-- **Authorization**: Tool requires physical network access (field deployment)
+- **Authorization**: Network reachability is not permission. Scanning a subnet
+  requires written authorisation from its owner, which the tool cannot verify.
+  What it does enforce is access to its own API: a bearer token on every
+  `/api` route, a loopback bind unless `-listen` says otherwise, and Modbus
+  snapshot targets restricted to hosts already in the inventory. See
+  `openspec/changes/security-audit-remediation.md`
 
 ## Test Plan
 

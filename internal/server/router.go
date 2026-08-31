@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +34,7 @@ type Server struct {
 	alerts   *monitor.AlertEngine
 	snaps    *cfgmgmt.SnapshotStore
 	reporter *agent.Reporter
+	opts     Options
 }
 
 type scanProgress struct {
@@ -39,7 +43,17 @@ type scanProgress struct {
 	Total int    `json:"total"`
 }
 
-func New(db *store.DB, reporter *agent.Reporter) *Server {
+// Options carries the access-control settings the API router needs.
+type Options struct {
+	// AuthToken is the shared bearer token required on every /api route.
+	// Empty means the API fails closed rather than serving anonymously.
+	AuthToken string
+	// AllowedOrigins mirrors the CORS allowlist and is reused by the CSRF
+	// guard on state-changing requests.
+	AllowedOrigins []string
+}
+
+func New(db *store.DB, reporter *agent.Reporter, opts Options) *Server {
 	alerts := monitor.NewAlertEngine()
 	return &Server{
 		db:       db,
@@ -47,37 +61,46 @@ func New(db *store.DB, reporter *agent.Reporter) *Server {
 		monitor:  monitor.New(db, alerts),
 		snaps:    cfgmgmt.NewSnapshotStore(),
 		reporter: reporter,
+		opts:     opts,
 	}
 }
 
 func (s *Server) Router() chi.Router {
 	r := chi.NewRouter()
 
-	r.Post("/api/scan", s.handleScan)
-	r.Get("/api/scan/status", s.handleScanStatus)
-	r.Get("/api/assets", s.handleListAssets)
-	r.Get("/api/assets/{id}", s.handleGetAsset)
-	r.Get("/api/topology", s.handleTopology)
-	r.Get("/api/stats", s.handleStats)
+	// Every API route sits behind the bearer token and, for writes, the
+	// cross-site guard. The embedded static assets stay public so the
+	// dashboard can boot and then authenticate.
+	r.Group(func(api chi.Router) {
+		api.Use(TokenAuth(s.opts.AuthToken))
+		api.Use(CSRFGuard(s.opts.AllowedOrigins))
 
-	// Phase 2: Vulnerability + Compliance
-	r.Get("/api/vuln/{id}", s.handleVuln)
-	r.Get("/api/compliance", s.handleCompliance)
+		api.Post("/api/scan", s.handleScan)
+		api.Get("/api/scan/status", s.handleScanStatus)
+		api.Get("/api/assets", s.handleListAssets)
+		api.Get("/api/assets/{id}", s.handleGetAsset)
+		api.Get("/api/topology", s.handleTopology)
+		api.Get("/api/stats", s.handleStats)
 
-	// Phase 3: Monitoring
-	r.Post("/api/monitor/start", s.handleMonitorStart)
-	r.Post("/api/monitor/stop", s.handleMonitorStop)
-	r.Get("/api/monitor/status", s.handleMonitorStatus)
-	r.Get("/api/alerts", s.handleAlerts)
-	r.Get("/api/alerts/stats", s.handleAlertStats)
-	r.Post("/api/alerts/{id}/ack", s.handleAlertAck)
+		// Phase 2: Vulnerability + Compliance
+		api.Get("/api/vuln/{id}", s.handleVuln)
+		api.Get("/api/compliance", s.handleCompliance)
 
-	// Phase 4: Config Management
-	r.Post("/api/config/snapshot", s.handleSnapshot)
-	r.Post("/api/config/golden", s.handleSetGolden)
-	r.Get("/api/config/snapshots/{ip}", s.handleListSnapshots)
-	r.Get("/api/config/diff/{ip}", s.handleDiff)
-	r.Get("/api/config/devices", s.handleConfigDevices)
+		// Phase 3: Monitoring
+		api.Post("/api/monitor/start", s.handleMonitorStart)
+		api.Post("/api/monitor/stop", s.handleMonitorStop)
+		api.Get("/api/monitor/status", s.handleMonitorStatus)
+		api.Get("/api/alerts", s.handleAlerts)
+		api.Get("/api/alerts/stats", s.handleAlertStats)
+		api.Post("/api/alerts/{id}/ack", s.handleAlertAck)
+
+		// Phase 4: Config Management
+		api.Post("/api/config/snapshot", s.handleSnapshot)
+		api.Post("/api/config/golden", s.handleSetGolden)
+		api.Get("/api/config/snapshots/{ip}", s.handleListSnapshots)
+		api.Get("/api/config/diff/{ip}", s.handleDiff)
+		api.Get("/api/config/devices", s.handleConfigDevices)
+	})
 
 	// Embedded frontend
 	r.HandleFunc("/*", staticHandler())
@@ -338,6 +361,53 @@ func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// snapshotFailedMsg is the only text a client ever sees for a failed
+// snapshot. Distinguishing "connection refused" from "timeout" would turn
+// this endpoint into an internal port-scanning oracle.
+const snapshotFailedMsg = "snapshot failed"
+
+// errSnapshotTargetDenied covers every allowlist rejection with one message,
+// so the caller cannot tell an unknown host from a closed port.
+var errSnapshotTargetDenied = errors.New("host is not a discovered asset with that port open")
+
+// validateSnapshotTarget confines the Modbus client to hosts this scanner has
+// actually discovered. Without it, host and port come straight from the
+// request body and the scanner becomes a pivot into the rest of the network.
+//
+// Rules:
+//   - the host must be an IP literal, so there is no DNS name to rebind;
+//   - that IP must belong to an asset already in the inventory;
+//   - the port must be one of that asset's discovered open ports, or the
+//     Modbus default 502.
+func validateSnapshotTarget(assets []store.Asset, host string, port int) error {
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return errSnapshotTargetDenied
+	}
+	if port == 0 {
+		port = 502
+	}
+	if port < 1 || port > 65535 {
+		return errSnapshotTargetDenied
+	}
+
+	for _, a := range assets {
+		assetIP := net.ParseIP(strings.TrimSpace(a.IP))
+		if assetIP == nil || !assetIP.Equal(ip) {
+			continue
+		}
+		if port == 502 {
+			return nil
+		}
+		for _, open := range a.OpenPorts {
+			if open == port {
+				return nil
+			}
+		}
+	}
+	return errSnapshotTargetDenied
+}
+
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	var req cfgmgmt.SnapshotRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -349,9 +419,22 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	assets, err := s.db.ListAssets()
+	if err != nil {
+		slog.Error("snapshot allowlist lookup failed", "error", err)
+		response.Err(w, http.StatusInternalServerError, "failed to list assets")
+		return
+	}
+	if err := validateSnapshotTarget(assets, req.Host, req.Port); err != nil {
+		slog.Warn("snapshot target denied", "host", req.Host, "port", req.Port, "remote", r.RemoteAddr)
+		response.Err(w, http.StatusForbidden, errSnapshotTargetDenied.Error())
+		return
+	}
+
 	snap, err := cfgmgmt.TakeSnapshot(req)
 	if err != nil {
-		response.Err(w,http.StatusBadGateway, "snapshot failed: "+err.Error())
+		slog.Warn("snapshot failed", "host", req.Host, "port", req.Port, "error", err)
+		response.Err(w, http.StatusBadGateway, snapshotFailedMsg)
 		return
 	}
 

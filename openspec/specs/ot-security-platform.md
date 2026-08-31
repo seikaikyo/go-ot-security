@@ -167,7 +167,7 @@ type Alert struct {
 | Raspberry Pi | `GOOS=linux GOARCH=arm64 go build` |
 | Industrial PC (x86) | `GOOS=linux GOARCH=amd64 go build` |
 | Docker | Multi-stage Dockerfile |
-| Factory network | Single binary, port 8443 (HTTPS) |
+| Factory network | Single binary, `127.0.0.1:8080` plain HTTP by default; `-listen` to expose it, `TLS_CERT_FILE`/`TLS_KEY_FILE` for HTTPS |
 
 ## Implementation Phases
 
@@ -188,6 +188,23 @@ anomaly detection + MITRE ATT&CK rules + real-time alerts.
 PLC register snapshot + diff + golden image + change tracking +
 timeline view.
 
+## API Access Control
+
+The API exposes the full asset inventory, the per-device default credential
+findings and the compliance report. Access control is therefore part of the
+spec, not an operational detail:
+
+| Control | Behaviour |
+|---------|-----------|
+| Authentication | Bearer token on every `/api` route, constant-time compare. Generated per run and printed to the console unless `OTSEC_API_TOKEN` pins one. No token configured means the API refuses to serve |
+| Bind address | `127.0.0.1:8080`. Exposing the API needs the explicit `-listen` flag or `OTSEC_LISTEN` |
+| CSRF | Non-GET routes require `Content-Type: application/json` and a same-origin or allowlisted `Origin` / `Sec-Fetch-Site` |
+| CORS | Loopback origins only by default; external origins via `CORS_ALLOWED_ORIGINS` |
+| Snapshot target | `POST /api/config/snapshot` only reaches an IP already present in the asset inventory, on a discovered open port or 502 |
+| Error detail | Snapshot failures return one fixed string; the cause goes to the log, so the endpoint is not a port-probe oracle |
+| Public routes | `/health` and the embedded dashboard assets only |
+
 ## Related Changes
 
 - [[phase1-asset-discovery]]
+- [[security-audit-remediation]]
