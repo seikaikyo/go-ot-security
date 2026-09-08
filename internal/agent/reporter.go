@@ -20,11 +20,17 @@ import (
 type Reporter struct {
 	coordinatorURL string
 	nodeID         string
+	apiKey         string
 	client         *http.Client
 }
 
-// NewReporter 建立 Reporter，若 coordinatorURL 為空則回傳 nil（停用回報功能）
-func NewReporter(coordinatorURL, nodeID string) *Reporter {
+// NewReporter 建立 Reporter，若 coordinatorURL 為空則回傳 nil（停用回報功能）。
+//
+// apiKey 對應 coordinator 端 /security 子樹的共用金鑰。回報內容含網段與設備
+// 清單，coordinator 自 2026-09-08 起要求認證，所以沒帶金鑰會被回 401。
+// 這裡不強制要求非空：coordinator 可能跑在受信任的內網而未設金鑰，
+// 是否放行由 coordinator 決定，不由 agent 猜測。
+func NewReporter(coordinatorURL, nodeID, apiKey string) *Reporter {
 	if coordinatorURL == "" {
 		return nil
 	}
@@ -34,6 +40,7 @@ func NewReporter(coordinatorURL, nodeID string) *Reporter {
 	return &Reporter{
 		coordinatorURL: coordinatorURL,
 		nodeID:         nodeID,
+		apiKey:         apiKey,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -42,14 +49,14 @@ func NewReporter(coordinatorURL, nodeID string) *Reporter {
 
 // reportPayload 是送往 coordinator 的完整回報結構
 type reportPayload struct {
-	NodeID    string          `json:"node_id"`
-	ScanID    string          `json:"scan_id"`
-	Timestamp string          `json:"timestamp"`
-	Subnet    string          `json:"subnet"`
-	Summary   reportSummary   `json:"summary"`
+	NodeID     string                      `json:"node_id"`
+	ScanID     string                      `json:"scan_id"`
+	Timestamp  string                      `json:"timestamp"`
+	Subnet     string                      `json:"subnet"`
+	Summary    reportSummary               `json:"summary"`
 	Compliance map[string]frameworkSummary `json:"compliance"`
-	Alerts    []reportAlert   `json:"alerts"`
-	Devices   []reportDevice  `json:"devices"`
+	Alerts     []reportAlert               `json:"alerts"`
+	Devices    []reportDevice              `json:"devices"`
 }
 
 type reportSummary struct {
@@ -76,12 +83,12 @@ type reportAlert struct {
 }
 
 type reportDevice struct {
-	IP        string         `json:"ip"`
-	Vendor    string         `json:"vendor"`
-	Type      string         `json:"type"`
-	Protocols []string       `json:"protocols"`
-	RiskScore float64        `json:"risk_score"`
-	Vulns     []reportVuln   `json:"vulns"`
+	IP        string       `json:"ip"`
+	Vendor    string       `json:"vendor"`
+	Type      string       `json:"type"`
+	Protocols []string     `json:"protocols"`
+	RiskScore float64      `json:"risk_score"`
+	Vulns     []reportVuln `json:"vulns"`
 }
 
 type reportVuln struct {
@@ -132,6 +139,9 @@ func (r *Reporter) SendReport(ctx context.Context, scan *store.ScanRecord, compR
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if r.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+r.apiKey)
+	}
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -142,6 +152,11 @@ func (r *Reporter) SendReport(ctx context.Context, scan *store.ScanRecord, compR
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		slog.Info("reporter: 回報已送達 coordinator", "scan_id", scan.ID, "status", resp.StatusCode)
+	} else if resp.StatusCode == http.StatusUnauthorized {
+		// 分流出來：401 是「金鑰沒設或設錯」，跟一般的 5xx 是不同的處理方式，
+		// 混在一起會讓人花時間去查 coordinator 有沒有掛掉。
+		slog.Warn("reporter: coordinator 拒絕認證，請確認 COORDINATOR_API_KEY 與 coordinator 端的 INFRA_API_KEY 一致",
+			"scan_id", scan.ID, "status", resp.StatusCode)
 	} else {
 		slog.Warn("reporter: coordinator 回應非 2xx", "scan_id", scan.ID, "status", resp.StatusCode)
 	}
@@ -149,10 +164,10 @@ func (r *Reporter) SendReport(ctx context.Context, scan *store.ScanRecord, compR
 
 func (r *Reporter) buildPayload(scan *store.ScanRecord, compReport *compliance.FullReport, alerts []monitor.Alert, assets []store.Asset) reportPayload {
 	p := reportPayload{
-		NodeID:    r.nodeID,
-		ScanID:    scan.ID,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Subnet:    scan.Subnet,
+		NodeID:     r.nodeID,
+		ScanID:     scan.ID,
+		Timestamp:  time.Now().Format(time.RFC3339),
+		Subnet:     scan.Subnet,
 		Compliance: make(map[string]frameworkSummary),
 	}
 

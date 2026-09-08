@@ -43,6 +43,7 @@ func main() {
 	}
 
 	coordinatorURL := os.Getenv("COORDINATOR_URL")
+	coordinatorAPIKey := os.Getenv("COORDINATOR_API_KEY")
 	nodeID := os.Getenv("NODE_ID")
 	if nodeID == "" {
 		nodeID = "ot-security-default"
@@ -71,9 +72,11 @@ func main() {
 	defer db.Close()
 
 	// Coordinator reporter
-	reporter := agent.NewReporter(coordinatorURL, nodeID)
+	reporter := agent.NewReporter(coordinatorURL, nodeID, coordinatorAPIKey)
 	if reporter != nil {
-		slog.Info("coordinator reporter enabled", "url", coordinatorURL, "node_id", nodeID)
+		// 不記金鑰內容，只記有沒有設定
+		slog.Info("coordinator reporter enabled", "url", coordinatorURL, "node_id", nodeID,
+			"authenticated", coordinatorAPIKey != "")
 	}
 
 	// CORS: only loopback development origins by default. The scanner holds
