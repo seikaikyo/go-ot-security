@@ -5,7 +5,7 @@ go 1.26.1
 toolchain go1.26.10
 
 require (
-	github.com/go-chi/chi/v5 v5.3.0
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/go-chi/cors v1.2.2
 	github.com/goburrow/modbus v0.1.0
 	github.com/seikaikyo/go-common v0.1.0
